@@ -1,0 +1,142 @@
+#include <WiFi.h>
+#include <AsyncUDP.h>
+
+// -------------------- WIFI SETTINGS --------------------
+const char* ssid = "Surya";          // Your Wi-Fi SSID
+const char* password = "password";   // Your Wi-Fi password
+
+// -------------------- MOTOR PINS --------------------
+#define IN1 27
+#define IN2 26
+#define ENA 14
+#define IN3 25
+#define IN4 33
+#define ENB 32
+
+// -------------------- ULTRASONIC SENSOR --------------------
+#define TRIG_PIN 13
+#define ECHO_PIN 12
+#define OBSTACLE_DISTANCE 15  // in cm
+
+AsyncUDP udp;
+bool obstacleDetected = false;
+
+// -------------------- MOTOR CONTROL FUNCTIONS --------------------
+void moveForward(int speed) {
+  digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW);
+  digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW);
+  analogWrite(ENA, speed); analogWrite(ENB, speed);
+  Serial.println("Moving Forward");
+}
+
+void moveBackward(int speed) {
+  digitalWrite(IN1, LOW); digitalWrite(IN2, HIGH);
+  digitalWrite(IN3, LOW); digitalWrite(IN4, HIGH);
+  analogWrite(ENA, speed); analogWrite(ENB, speed);
+  Serial.println("Moving Backward");
+}
+
+void turnLeft(int speed) {
+  digitalWrite(IN1, LOW); digitalWrite(IN2, HIGH);
+  digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW);
+  analogWrite(ENA, speed); analogWrite(ENB, speed);
+  Serial.println("Turning Left");
+}
+
+void turnRight(int speed) {
+  digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW);
+  digitalWrite(IN3, LOW); digitalWrite(IN4, HIGH);
+  analogWrite(ENA, speed); analogWrite(ENB, speed);
+  Serial.println("Turning Right");
+}
+
+void stopMotors() {
+  digitalWrite(IN1, LOW); digitalWrite(IN2, LOW);
+  digitalWrite(IN3, LOW); digitalWrite(IN4, LOW);
+  analogWrite(ENA, 0); analogWrite(ENB, 0);
+  Serial.println("STOP");
+}
+
+// -------------------- ULTRASONIC SENSOR --------------------
+long readDistanceCM() {
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+  long duration = pulseIn(ECHO_PIN, HIGH, 30000);
+  return duration * 0.034 / 2;
+}
+
+// -------------------- SETUP --------------------
+void setup() {
+  Serial.begin(115200);
+  pinMode(IN1, OUTPUT); pinMode(IN2, OUTPUT);
+  pinMode(IN3, OUTPUT); pinMode(IN4, OUTPUT);
+  pinMode(ENA, OUTPUT); pinMode(ENB, OUTPUT);
+  pinMode(TRIG_PIN, OUTPUT); pinMode(ECHO_PIN, INPUT);
+  stopMotors();
+
+  // Connect to Wi-Fi
+  WiFi.begin(ssid, password);
+  Serial.print("Connecting to Wi-Fi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\n✅ Wi-Fi Connected!");
+  Serial.print("ESP32 IP Address: ");
+  Serial.println(WiFi.localIP());
+
+  // Start UDP listener
+  if (udp.listen(1234)) {
+    Serial.println("✅ UDP Listening on port 1234");
+
+    udp.onPacket([](AsyncUDPPacket packet) {
+      String msg = "";
+      for (size_t i = 0; i < packet.length(); i++) {
+        char c = (char)packet.data()[i];
+        if (c != 0 && c != '\n' && c != '\r') msg += c;
+      }
+      msg.trim();
+      Serial.println("Received: " + msg);
+
+      int speed = 255;
+      String cmd = "STOP";
+
+      int cmd_idx = msg.indexOf("CMD:");
+      int spd_idx = msg.indexOf("SPD:");
+      if (cmd_idx >= 0 && spd_idx > cmd_idx) {
+        cmd = msg.substring(cmd_idx + 4, spd_idx);
+        cmd.trim();
+        speed = msg.substring(spd_idx + 4).toInt();
+        speed = constrain(speed, 0, 255);
+      }
+
+      long distance = readDistanceCM();
+      Serial.print("Distance: "); Serial.print(distance); Serial.println(" cm");
+
+      if (distance > 0 && distance < OBSTACLE_DISTANCE && cmd == "FORWARD") {
+        stopMotors();
+        obstacleDetected = true;
+        Serial.println("⚠️ Obstacle Detected — STOPPING");
+      } else {
+        if (obstacleDetected && distance > OBSTACLE_DISTANCE + 5) {
+          obstacleDetected = false;
+          Serial.println("✅ Path Clear");
+        }
+
+        if (cmd == "FORWARD" && !obstacleDetected) moveForward(speed);
+        else if (cmd == "BACKWARD") moveBackward(speed);
+        else if (cmd == "LEFT") turnLeft(speed);
+        else if (cmd == "RIGHT") turnRight(speed);
+        else stopMotors();
+      }
+    });
+  }
+}
+
+// -------------------- LOOP --------------------
+void loop() {
+  // AsyncUDP automatically handles packets
+}
